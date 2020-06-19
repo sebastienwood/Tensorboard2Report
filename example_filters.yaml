@@ -1,0 +1,4 @@
+AtomicFilter:
+  dataset: CIFAR100
+  depth: 28
+  

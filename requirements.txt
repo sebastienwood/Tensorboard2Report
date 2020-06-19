@@ -1,0 +1,4 @@
+tensorboard==2.1.1
+pandas==1.0.4
+numpy==1.17.2
+PyYAML==5.3.1
