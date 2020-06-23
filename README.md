@@ -11,6 +11,7 @@ This small project aims to alleviate this issue:
 - specify how you want to reduce the experiment to a single datapoint : latest entry ? maximum ?
 - get a simple .csv and plug it in your prefered tool to generate reports (Latex/PGFplot oriented .csv organisation)
 
+*Note* : the experiments should have an `hparams.yaml` file in the same folder as the Tensorboard event's file. This is the case when using [Pytorch-lightning](https://github.com/PyTorchLightning/pytorch-lightning).
 <!-- ![](header.png) -->
 
 ## Installation and usage
@@ -54,11 +55,20 @@ If you would like to use the script of the shelf, here are the possible paramete
 ## Contributing
 Feel free to suggest improvements/pull requests c:
 
-## Release History
+Looking for suggestions on:
+- which formats of hyperparameters files to support
+- reductions/filters to add
+- use cases : should the generated reports always stick to the current convention ?
 
+## Release History
+* 0.0.2 (23/06/20)
+    * Fixed unwanted behaviors with Reduction(Enum) by switching to \[reductions, ...\]
+    * Added support for archived experiment folders
+    * Clarified the need for an `hparams.yaml` file for each experiment
+    * Added few filters/reduction methods
 * 0.0.1 (19/06/20)
     *  Initial release
-    * Support for atomic filters
+    *  Support for atomic filters
 
 ## Meta
 
