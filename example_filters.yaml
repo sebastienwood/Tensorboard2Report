@@ -1,4 +1,12 @@
 AtomicFilter:
-  dataset: CIFAR100
+  dataset: CIFAR10
   depth: 28
-  
+  dropit: false
+Metrics:
+  - 'Cons/act_cons'
+  - 'Cons/cls_weight_cons'
+  - 'Acc/val_acc5'
+Groupby:
+  type: 'in_or_else_group'
+  grouped_values: 
+    -1

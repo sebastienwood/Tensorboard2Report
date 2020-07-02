@@ -38,8 +38,35 @@ def kbestoflastl(listT:List[Union[int, float]]) -> List[int]:
 
 reductions = ['argmax', 'arglast', 'topk', 'lastk']
 
+# Groupby Utils
+groupbies = ['as_is', 'in_or_else_group']
+class Groupir():
+    r"""
+        How groups are formed
+
+    Note 1 : hideous piece of code but works, to review if complexity increase
+    Note 2 : https://www.youtube.com/watch?v=MydtkuxcKw4
+    """
+    def __init__(self, grouptype, kwargs=None):
+        self.type = grouptype
+        assert self.type in groupbies
+        if self.type == 'in_or_else_group':
+            assert 'grouped_values' in kwargs
+            self.groups = kwargs.get('grouped_values')
+            if type(self.groups) != list:
+                self.groups = [self.groups] 
+
+    def groupby(self, value):
+        if self.type == 'as_is':
+            return value
+        elif self.type == 'in_or_else_group':
+            return value if value in self.groups else 'else'
+        else:
+            raise NotImplementedError(f'The type {self.type} does not exists')
+
+# OS utils
 def fast_scandir(dirname):
-    subfolders= [f.path for f in os.scandir(dirname) if f.is_dir()]
+    subfolders= [f.path for f in os.scandir(dirname) if f.is_dir() and not 'checkpoint' in str(f)]
     for dirname in list(subfolders):
         subfolders.extend(fast_scandir(dirname))
     return subfolders
@@ -107,10 +134,16 @@ class RangeFilter(Filter):
         return True
 
 class ORFilterBank(Filter):
+    r"""
+        This is supposed to take a list of atomic-like filters and return true if one of these is true
+    """
     def check(self, other:Union[int, float, str]):
         raise NotImplementedError("The ORFilter has not yet been implemented.")
 
 class ANDFilterBank(Filter):
+    r"""
+        This is supposed to take a list of atomic-like filters and return true if all of these are true
+    """
     def check(self, other:Union[int, float, str]):
         raise NotImplementedError("The ANDFilter has not yet been implemented.")
 
@@ -118,8 +151,9 @@ def report(vars_of_interest: List[str],
             experiment_key_metric: str,
             groupby: str,
             experiment_filters: Union[List[Filter], Filter],
-            reduction_strategy: Callable[[List[Union[int, float]], int], Union[int, List[int]]],
+            reduction_strategy: str='arglast',
             log_dir:str='./',
+            groupby_kwargs:dict=None,
             reduction_kwargs=None):
     r"""
     Produce a .csv report with all the `vars_of_interest` grouped by `groupby`
@@ -133,7 +167,7 @@ def report(vars_of_interest: List[str],
 
         experiment_filters: list or single instance of Filter. Experiments whose hyperparameters do not comply with these filters won't be kept in the report.
 
-        reduction_strategy: how to reduce the data to a single datapoint. Member of Reduction enum.
+        reduction_strategy: how to reduce the data to a single datapoint. One of `reductions` list.
 
         log_dir: where are the tensorboard logs stored
 
@@ -144,6 +178,11 @@ def report(vars_of_interest: List[str],
     # Get a list of all experiments, prepare list of results
     experiments = fast_scandir(log_dir)#[f.path for f in os.scandir(log_dir) if f.is_dir()]
     results = []
+    idx_tar = 0
+
+    groupby_type = groupby_kwargs.pop('type') if groupby_kwargs is not None else 'as_is'
+    groupir = Groupir(grouptype=groupby_type,
+                    kwargs=groupby_kwargs)
 
     for exp in experiments:
         print(f"-> Processing experiment {exp}")
@@ -166,7 +205,7 @@ def report(vars_of_interest: List[str],
             # Now reduce to a value per experiment
             idx_tar = apply_reduction_strategy(reduction_strategy, res[experiment_key_metric][0], reduction_kwargs) #TODO getting the 0th idx is not clean
             res_dict = {
-                f'{var}_{groupby}{hparams[groupby]}': [res[var][0][idx_tar]] for var in vars_of_interest+[experiment_key_metric]
+                f'{var}_{groupby}{groupir.groupby(hparams[groupby])}': [res[var][0][idx_tar]] for var in vars_of_interest+[experiment_key_metric]
             }
             results.append(pd.DataFrame(res_dict))
         else: 
@@ -176,6 +215,7 @@ def report(vars_of_interest: List[str],
     #TODO are the NaN from concat an issue ?
     with open(f'./report_per_{groupby}.csv', 'w') as f:
         for filt in experiment_filters: f.write(f'# {filt}\n')
+        f.write(f'# {idx_tar} index kept\n')
     pd.concat(results, ignore_index=True).to_csv(f'./report_per_{groupby}.csv', mode='a', index=False)
 
 def is_experiment_filtered(hparams:dict,
@@ -192,16 +232,22 @@ def is_experiment_filtered(hparams:dict,
 def apply_reduction_strategy(red:str, key_metric:list, kwargs=None):
     return globals()[red](key_metric) if kwargs is None else globals()[red](key_metric, kwargs)
 
-def parse_filter(path:str) -> List[Filter]:
+def parse_params(path:str) -> List[Filter]:
     r"""
         Parse a .yaml file comprising dict for each filter with key/value entries
     """
-    filts = []
+    filts, metrics, groupby_kwargs = [], [], None
     filts_raw = yaml.load(io.open(path, 'r'), Loader=yaml.FullLoader)
     for filterDict in filts_raw:
-        nf = [globals()[filterDict](k, v) for k, v in filts_raw[filterDict].items()]
-        filts.extend(nf)
-    return filts
+        if filterDict == 'Metrics':
+            metrics.extend(filts_raw[filterDict])
+        elif filterDict == 'Groupby':
+            groupby_kwargs = filts_raw[filterDict]
+        else:
+            nf = [globals()[filterDict](k, v) for k, v in filts_raw[filterDict].items()]
+            filts.extend(nf)
+    assert len(metrics) != 0 and len(filts) != 0
+    return filts, metrics, groupby_kwargs
 
 def main(args):
     r"""
@@ -211,17 +257,19 @@ def main(args):
 
     p = Path(args.logdir)
     if p.suffix in ARCHIVES_FMT:
-        shutil.unpack_archive(p, p.parent/ 'temp')
+        if os.path.isdir(p.parent/ 'temp'): shutil.rmtree(p.parent/ 'temp') # ensure folder is empty
+        shutil.unpack_archive(p, p.parent/ 'temp') # unpack the archive in the empty folder ! c:
         F_archive = True
         args.logdir = p.parent / 'temp'
         print(f'Successfully unpacked the archive at {args.logdir}')
 
-    filts = parse_filter(args.filters)
-    report(vars_of_interest=args.metrics, 
+    filts, metrics, groupby_kwargs = parse_params(args.yaml)
+    report(vars_of_interest=metrics, 
             experiment_key_metric=args.target, 
             groupby=args.groupby, 
             experiment_filters=filts, 
             reduction_strategy=args.reduction,
+            groupby_kwargs=groupby_kwargs,
             reduction_kwargs=args.reduction_kwargs,
             log_dir=args.logdir)
 
@@ -230,13 +278,13 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--filters', type=str, help='Path to your yaml.config file', default='example_filters.yaml')
+    parser.add_argument('--params-yaml', type=str, help='Path to your yaml.config file', default='example_filters.yaml', dest='yaml')
     parser.add_argument('--logdir', type=str, help='Path to your tensorboard log dir (can be an archive file)', default='/export/tmp/henwood/lightning_logs')
     parser.add_argument('--groupby', type=str, help='Hparams to group experiments', default='alpha')
     parser.add_argument('--target', type=str, help='Experiment key metric, will be used to reduce the exp. to a single value', default="Acc/val_acc1")
     parser.add_argument('--reduction', choices=reductions, type=str, help='How is reduced the experiment to a single value', default='arglast')
     parser.add_argument('--reduction-kwargs', help='Extra parameter passed to Reduction')
-    parser.add_argument('--metrics', nargs='+', help='All the variables to include in the report', default=['Cons/act_cons', 'Cons/cls_weight_cons'])
+    # parser.add_argument('--metrics', nargs='+', help='All the variables to include in the report', default=['Cons/act_cons', 'Cons/cls_weight_cons'])
     args = parser.parse_args()
 
     main(args)
